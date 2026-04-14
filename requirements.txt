@@ -1,0 +1,10 @@
+anthropic
+pinecone
+feedparser
+beautifulsoup4
+requests
+pymupdf
+streamlit
+schedule
+python-dotenv
+pandas
