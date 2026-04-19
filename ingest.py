@@ -1,5 +1,6 @@
 import feedparser
 import requests
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin
@@ -9,7 +10,7 @@ import fitz  # PyMuPDF
 from sources import RSS_FEEDS, SCRAPE_URLS, PDF_URLS
 
 # ── Date freshness filter ──
-def is_recent(date_str, days=30):
+def is_recent(date_str, days=45):
     """Returns True if the article is within the last X days."""
     if not date_str:
         return True
@@ -119,13 +120,20 @@ def extract_pdf_text(source, is_url=True):
 
 # ── Find PDF links on a page ──
 def find_pdf_links(soup, base_url):
-    """Find all PDF links on a page."""
+    """Find all PDF links on a page, excluding known junk/boilerplate PDFs."""
+    # PDFs that appear in footers/nav on many sites — not intelligence content
+    _JUNK_PDF = [
+        "modern-slavery", "cookie-policy", "terms-of-use",
+        "privacy-policy", "code-of-conduct", "whistleblowing",
+        "accessibility", "annual-report-cover",
+    ]
     pdf_links = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
         full_url = urljoin(base_url, href)
-        if full_url.lower().endswith(".pdf") or \
-           "pdf" in full_url.lower():
+        if full_url.lower().endswith(".pdf") or "pdf" in full_url.lower():
+            if any(p in full_url.lower() for p in _JUNK_PDF):
+                continue
             pdf_links.append(full_url)
     return list(dict.fromkeys(pdf_links))
 
@@ -136,9 +144,9 @@ def fetch_rss_articles(feeds):
         try:
             feed = feedparser.parse(url)
             added = 0
-            for entry in feed.entries[:20]:
+            for entry in feed.entries[:40]:
                 pub_date = entry.get("published", "")
-                if pub_date and not is_recent(pub_date, days=30):
+                if pub_date and not is_recent(pub_date, days=45):
                     print(
                         f"    ↷ Skipped old: "
                         f"{entry.get('title','')[:50]}"
@@ -160,7 +168,7 @@ def fetch_rss_articles(feeds):
                     "content": content,
                     "url": entry_url,
                     "source": feed.feed.get("title", url),
-                    "date": pub_date or str(datetime.now()),
+                    "date": pub_date or "",
                     "type": "rss-pdf"
                           if entry_url.lower().endswith(".pdf")
                           else "rss"
@@ -175,10 +183,19 @@ def fetch_rss_articles(feeds):
 # ── Scrape pages, follow links, download PDFs ──
 def scrape_page(url):
     try:
-        response = requests.get(
-            url, timeout=10,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
+        _hdrs = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5"
+        }
+        try:
+            response = requests.get(url, timeout=10, headers=_hdrs)
+        except requests.exceptions.SSLError:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            response = requests.get(url, timeout=10, headers=_hdrs, verify=False)
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Find PDF links before cleaning
@@ -188,21 +205,74 @@ def scrape_page(url):
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
 
-        # Find article links on the page — limit to 5
-        links = []
+        # Smart link filter — skip nav/footer/section-index pages,
+        # keep only content/product/article URLs.
+        # Limit raised to 25 so index pages with many sub-pages aren't cut off.
+        _SKIP = [
+            # Generic nav/utility (all sites)
+            "/category/", "/tag/", "/author/", "/page/",
+            "/login", "/register", "/subscribe", "/search",
+            "/contact", "/advertise", "/privacy",
+            "/rss", "/feed", "/sitemap", "/cdn-cgi/",
+            "javascript:", "mailto:", "#",
+            "/pages/", "/publication/", "/tab-",
+            "/digital-push",
+            # Section index pages (banks and financial sites)
+            "/about", "/our-", "/investors/", "/investor-relations/",
+            "/media/", "/media-centre/", "/media-center/",
+            "/careers/", "/global-careers/", "/jobs",
+            "/newsroom/",
+            "/faqs/", "/faq/",
+            "/accessibility/", "/cookie-policy/", "/terms-of-use/",
+            "/regulatory-disclosures/", "/suppliers/",
+            "/cyber-security", "/fighting-financial-crime/",
+            "/country-popup/",
+            "/events", "/awards", "/summit", "/forum",
+            # Asian Banker specific
+            "/filter-videos", "/keywords/", "/institution/",
+            "/country/", "/region/", "/guest/",
+        ]
+
+        def _is_article_link(href, base_url):
+            """Returns True only for content/product/article pages."""
+            # Must be exactly the same domain — string-contains check fails
+            # for social share URLs that embed the base domain as a query param
+            # e.g. linkedin.com/share?url=https://theasianbanker.com/...
+            try:
+                href_netloc = urlparse(href).netloc
+                base_netloc = urlparse(base_url).netloc
+            except Exception:
+                return False
+            if href_netloc != base_netloc:
+                return False
+            path = urlparse(href).path.rstrip("/")
+            segments = [s for s in path.split("/") if s]
+            if len(segments) < 2:
+                return False
+            if re.search(r"/page/\d+", href):
+                return False
+            if any(p in href for p in _SKIP):
+                return False
+            return True
+
+        raw_links = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if href.startswith("/"):
                 base = urlparse(url)
                 href = f"{base.scheme}://{base.netloc}{href}"
-            if urlparse(url).netloc in href:
-                links.append(href)
+            if _is_article_link(href, url):
+                raw_links.append(href)
 
-        links = list(dict.fromkeys(links))[:5]
+        # Deduplicate, keep up to 25 qualifying content links
+        links = list(dict.fromkeys(raw_links))[:25]
 
         articles = []
 
         # Scrape main page itself
+        # Use empty date for static pages — stamping today's date makes
+        # old product pages appear as fresh news in the digest.
+        # extract.py will handle undated signals appropriately.
         text = soup.get_text(separator=" ", strip=True)[:3000]
         if len(text) > 200:
             articles.append({
@@ -210,8 +280,8 @@ def scrape_page(url):
                 "content": text,
                 "url": url,
                 "source": url,
-                "date": str(datetime.now()),
-                "type": "scrape"
+                "date": "",
+                "type": "scrape-static"
             })
 
         # Download PDFs found on this page — limit to 2
@@ -232,7 +302,7 @@ def scrape_page(url):
                     "content": pdf_text,
                     "url": pdf_url,
                     "source": url,
-                    "date": str(datetime.now()),
+                    "date": "",
                     "type": "pdf"
                 })
                 pdf_count += 1
@@ -245,15 +315,17 @@ def scrape_page(url):
             if link.lower().endswith(".pdf"):
                 continue
             try:
-                r = requests.get(
-                    link, timeout=10,
-                    headers={"User-Agent": "Mozilla/5.0"}
-                )
+                try:
+                    r = requests.get(link, timeout=10, headers=_hdrs)
+                except requests.exceptions.SSLError:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                    r = requests.get(link, timeout=10, headers=_hdrs, verify=False)
                 s = BeautifulSoup(r.text, "html.parser")
 
                 pub_date = extract_date_from_page(s)
 
-                if pub_date and not is_recent(pub_date, days=30):
+                if pub_date and not is_recent(pub_date, days=45):
                     skipped += 1
                     print(f"    ↷ Skipped old: {link[:60]}")
                     continue
@@ -278,7 +350,7 @@ def scrape_page(url):
                             "content": pdf_text,
                             "url": pdf_url,
                             "source": url,
-                            "date": pub_date or str(datetime.now()),
+                            "date": pub_date or "",
                             "type": "pdf"
                         })
                         print(
@@ -297,8 +369,7 @@ def scrape_page(url):
                         "content": body,
                         "url": link,
                         "source": url,
-                        "date": pub_date if pub_date
-                                else str(datetime.now()),
+                        "date": pub_date if pub_date else "",
                         "type": "scrape-deep"
                     })
                     kept += 1
@@ -341,7 +412,7 @@ def fetch_direct_pdfs(pdf_urls):
                 "content": pdf_text,
                 "url": url,
                 "source": url,
-                "date": str(datetime.now()),
+                "date": "",
                 "type": "pdf-direct"
             })
             print(f"  ✓ Extracted: {pdf_title[:60]}")
@@ -377,7 +448,7 @@ def fetch_local_pdfs(folder="documents"):
                 "content": pdf_text,
                 "url": f"local://{path}",
                 "source": "local",
-                "date": str(datetime.now()),
+                "date": "",
                 "type": "pdf-local"
             })
             print(f"  ✓ Extracted: {filename}")
@@ -385,12 +456,52 @@ def fetch_local_pdfs(folder="documents"):
             print(f"  ✗ Could not extract: {filename}")
     return articles
 
+# ── Manually curated high-value articles ──
+# Articles confirmed publicly accessible but blocked by JS rendering.
+# Add new entries here when you find important articles the pipeline misses.
+MANUAL_ARTICLES = [
+    {
+        "title": "Standard Chartered builds transaction banking around ASEAN cross-border complexity",
+        "content": (
+            "Standard Chartered is positioning its transaction banking business in ASEAN around "
+            "rising intra-Asia flows, fragmented liquidity structures and the growing role of "
+            "platforms, digital infrastructure and new forms of money. "
+            "Ankur Kanwar, Head of Transaction Banking & Cash Management, Singapore & ASEAN, "
+            "noted that the China-ASEAN trade corridor has recently surpassed $1 trillion. "
+            "ASEAN attracts about 15% to 17% of global FDI with each market developing a distinct role. "
+            "Malaysia is expanding in shared services and capability centres, while Indonesia is "
+            "receiving inflows linked to infrastructure and industrial projects. "
+            "Domestic payment systems across ASEAN have become significantly more efficient with "
+            "real-time infrastructure including PayNow, PromptPay, DuitNow and QRIS. "
+            "Cross-border payments remain fragmented. Project Nexus aims to link domestic payment "
+            "systems across countries. FX has delivered double-digit growth in ASEAN. "
+            "Standard Chartered is developing tokenised deposit capabilities allowing clients to "
+            "move funds 24/7 cross-border, alongside solutions enabling clients to accept stablecoins "
+            "while receiving fiat. SC Pay and Trade Express support real-time processing and API "
+            "integration. Standard Chartered is the only bank with presence in 10 ASEAN markets, "
+            "with seven offering full transaction banking capabilities. "
+            "Treasury centres in Singapore more than doubled post-COVID. "
+            "Partior partnership enables real-time 24/7 cross-border transactions with integrated FX."
+        ),
+        "url": "https://www.theasianbanker.com/updates-and-articles/standard-chartered-builds-transaction-banking-around-asean-s-cross-border-complexity",
+        "source": "The Asian Banker",
+        "date": "Wed, 09 Apr 2026 00:00:00",
+        "type": "rss"
+    },
+]
+
 # ── Main pipeline ──
 def ingest_all():
-    print("\n── Fetching RSS feeds (last 30 days only) ──")
+    print("\n── Fetching RSS feeds (last 45 days only) ──")
     articles = fetch_rss_articles(RSS_FEEDS)
 
-    print("\n── Scraping pages (last 30 days, 5 sub-links per page) ──")
+    # Inject manually curated articles
+    print(f"\n── Injecting {len(MANUAL_ARTICLES)} manually curated articles ──")
+    for a in MANUAL_ARTICLES:
+        articles.append(a)
+        print(f"  ✓ {a['title'][:70]}")
+
+    print("\n── Scraping pages (last 45 days, up to 25 article links per page) ──")
     for url in SCRAPE_URLS:
         pages = scrape_page(url)
         if pages:
@@ -401,6 +512,23 @@ def ingest_all():
 
     local_articles = fetch_local_pdfs("documents")
     articles.extend(local_articles)
+
+    # ── Global deduplication by URL ──
+    # Removes duplicate articles that arise when the same URL is followed
+    # as a sub-link from multiple different scrape pages (e.g. liquidity-management
+    # appearing as a link from both the TB index and a product page).
+    seen_urls = set()
+    deduped = []
+    for a in articles:
+        u = a.get("url", "").strip()
+        if u and u in seen_urls:
+            continue
+        seen_urls.add(u)
+        deduped.append(a)
+    removed = len(articles) - len(deduped)
+    if removed:
+        print(f"\n── Deduplication: removed {removed} duplicate URLs ──")
+    articles = deduped
 
     with open("raw_articles.json", "w") as f:
         json.dump(articles, f, indent=2)

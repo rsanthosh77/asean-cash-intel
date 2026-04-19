@@ -232,7 +232,7 @@ div[data-baseweb="select"] span { color: var(--mu) !important; font-family: 'IBM
 .drill-panel{background:var(--sf);border:1px solid rgba(0,194,168,.28);border-radius:8px;padding:14px;margin:10px 0 14px;}
 .drill-title{font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin-bottom:11px;}
 .page-info{text-align:center;font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:var(--mu);padding:5px;}
-.chat-user{background:var(--sf2);border:1px solid var(--bd2);border-radius:8px 8px 2px 8px;padding:10px 14px;margin:7px 0;font-size:13px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;margin-left:15%;}
+.chat-user{background:var(--sf2);border:1px solid var(--bd2);border-radius:6px;padding:10px 14px;margin:7px 0;font-size:13px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;text-align:left;}
 .chat-bot{background:var(--sf);border:1px solid var(--bd);border-radius:2px 8px 8px 8px;padding:12px 15px;margin:3px 0 13px;font-size:13px;color:#cbd5e1;font-family:'IBM Plex Sans',sans-serif;}
 .chat-bot strong{color:var(--teal);}
 .chat-err{background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.2);border-radius:6px;padding:9px 13px;font-size:11.5px;color:#fca5a5;font-family:'IBM Plex Mono',monospace;margin-bottom:11px;}
@@ -254,6 +254,24 @@ div[data-baseweb="select"] span { color: var(--mu) !important; font-family: 'IBM
     white-space:normal !important;
     height:auto !important;
     line-height:1.4 !important;
+    padding-left:12px !important;
+    display:flex !important;
+    align-items:flex-start !important;
+}
+.stButton button[kind="secondary"] p,
+.stButton button[kind="secondary"] div,
+.stButton button[kind="secondary"] span{
+    text-align:left !important;
+    margin:0 !important;
+    width:100% !important;
+}
+/* Override Streamlit's internal centering when use_container_width=True */
+.stButton > div > div > button[kind="secondary"]{
+    justify-content:flex-start !important;
+}
+.stButton > div > div > button[kind="secondary"] > div{
+    text-align:left !important;
+    width:100% !important;
 }
 .stButton button[kind="secondary"]:hover{border-color:var(--teal) !important;color:var(--teal) !important;}
 
@@ -277,7 +295,8 @@ hr{border-color:var(--bd) !important;margin:13px 0 !important;}
 # ─────────────────────────────────────────
 # DATA
 # ─────────────────────────────────────────
-@st.cache_data
+import re as _re
+
 def _dedup_key(s):
     """
     Two-pronged dedup key:
@@ -285,19 +304,26 @@ def _dedup_key(s):
     2. Regardless, same entity + normalised first 60 chars of key_signal = duplicate
     We return BOTH keys; a signal is a duplicate if either matches a seen key.
     """
-    import re
     entity = (s.get("entity") or "").lower().strip()
     url    = (s.get("url") or "").strip().rstrip("/")
     raw_signal = (s.get("key_signal") or "").lower()
-    # Normalise: remove punctuation, collapse spaces, take first 60 chars
-    norm = re.sub(r"[^a-z0-9 ]", " ", raw_signal)
-    norm = re.sub(r"\s+", " ", norm).strip()[:60]
+    norm = _re.sub(r"[^a-z0-9 ]", " ", raw_signal)
+    norm = _re.sub(r"\s+", " ", norm).strip()[:60]
     key_text = f"{entity}||{norm}"
     key_url  = f"{entity}||url:{url}" if url and not url.startswith("local://") else None
     return key_text, key_url
 
 
-def load_signals():
+def _get_file_mtime(path):
+    """Return file modification time, or 0 if file doesn't exist."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0
+
+
+@st.cache_data(ttl=60)   # re-check every 60 seconds
+def load_signals(_mtime=None):   # _mtime param busts cache when file changes
     try:
         with open("extracted_signals.json") as f:
             raw = json.load(f)
@@ -313,15 +339,29 @@ def load_signals():
     except FileNotFoundError:
         return []
 
-signals = load_signals()
+# Pass mtime so cache is busted automatically whenever the file changes
+signals = load_signals(_mtime=_get_file_mtime("extracted_signals.json"))
 
 def parse_date(ds):
     if not ds: return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S","%Y-%m-%d",
-                "%a, %d %b %Y %H:%M:%S %Z","%a, %d %b %Y %H:%M:%S %z",
-                "%d %b %Y","%B %d, %Y","%Y-%m-%d %H:%M:%S.%f"):
-        try: return datetime.strptime(ds[:25].strip(), fmt)
-        except: pass
+    # Try full string first, then truncated to 25 chars
+    for s in [ds.strip(), ds[:25].strip()]:
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%a, %d %b %Y %H:%M:%S %Z",   # RSS with tz name e.g. GMT
+            "%a, %d %b %Y %H:%M:%S %z",   # RSS with tz offset e.g. +0000
+            "%a, %d %b %Y %H:%M:%S",      # RSS without timezone
+            "%d %b %Y",
+            "%B %d, %Y",
+        ):
+            try:
+                dt = datetime.strptime(s, fmt)
+                # Always return timezone-naive datetime so comparisons work
+                return dt.replace(tzinfo=None)
+            except: pass
     return None
 
 def freshness(sigs):
@@ -336,6 +376,7 @@ def src_tag(s):
     if "consultant" in src or "consultant" in t: return "consultant"
     if "pdf" in t or "pdf" in src: return "pdf"
     if "regulatory" in src or s.get("signal_type","").lower() == "regulatory update": return "regulatory"
+    if "bank-product" in src or t in ("scrape-static", "scrape"): return "bank-product"
     return "news"
 
 def geo_ok(signal, sel):
@@ -362,6 +403,27 @@ def geo_ok(signal, sel):
             # Specific country: ONLY exact match — no ASEAN-Wide bleed
             if g == s: return True
     return False
+
+
+def _canonical_entity(name):
+    """
+    Return canonical (shorter, cleaner) form of an entity name.
+    Used to deduplicate the Competitor/Regulator filter dropdown
+    and to match signals when filtering.
+    Add new aliases here as needed.
+    """
+    name = name.strip()
+    aliases = {
+        "j.p. morgan chase":          "J.P. Morgan",
+        "jp morgan chase":            "J.P. Morgan",
+        "j.p.morgan":                 "J.P. Morgan",
+        "jpmorgan":                   "J.P. Morgan",
+        "jpmorgan chase":             "J.P. Morgan",
+        "j.p. morgan chase & co.":    "J.P. Morgan",
+        "mobifone digital payments joint stock company": "MobiFone Digital Payments",
+        "mobifone digital payments jsc":                 "MobiFone Digital Payments",
+    }
+    return aliases.get(name.lower(), name)
 
 def geo_cls(geo):
     if geo == "ASEAN-Wide": return "tag-geo-wide"
@@ -496,15 +558,18 @@ with sidebar_col:
         "Signal Type", options=type_opts, key="f_type", placeholder="All types"
     )
     source_filter = st.multiselect(
-        "Source Type", options=["news","pdf","consultant","regulatory"],
+        "Source Type", options=["news","pdf","consultant","regulatory","bank-product"],
         key="f_src", placeholder="All sources"
     )
+    # Build deduplicated canonical entity list using module-level _canonical_entity
     comp_opts = sorted(set(
-        s.get("entity","").strip() for s in signals
-        if s.get("entity","").strip()
+        _canonical_entity(s.get("entity","").strip())
+        for s in signals if s.get("entity","").strip()
     ))
+
     competitor_filter = st.multiselect(
-        "Competitor", options=comp_opts, key="f_comp", placeholder="All competitors"
+        "Competitor / Regulator", options=comp_opts, key="f_comp",
+        placeholder="All competitors & regulators"
     )
     min_score = st.slider("Min Score", min_value=1, max_value=5, value=1, key="f_score")
 
@@ -528,7 +593,45 @@ with sidebar_col:
 # ─────────────────────────────────────────
 # FILTER
 # ─────────────────────────────────────────
-cutoff = datetime.now() - timedelta(days=30)
+cutoff = datetime.now() - timedelta(days=45)
+
+# Keywords that indicate pure trade finance — excluded from cash intel
+TRADE_FINANCE_ONLY_TERMS = {
+    "bill of lading", "bills of lading", "letter of credit", "letters of credit",
+    "documentary collection", "documentary collections", "trade document",
+    "electronic trade document", "digital trade facilitation",
+    "trade facilitation bill", "trade finance bill",
+}
+
+def _is_pure_trade_finance(s):
+    """
+    Returns True if the signal is purely about trade finance
+    with no direct cash management or payments relevance.
+    Checks key_signal and so_what text.
+    """
+    combined = (
+        (s.get("key_signal") or "") + " " +
+        (s.get("so_what") or "")
+    ).lower()
+
+    # Must contain a trade finance term
+    has_tf_term = any(term in combined for term in TRADE_FINANCE_ONLY_TERMS)
+    if not has_tf_term:
+        return False
+
+    # Redeeming terms — if these appear, the signal still has cash relevance
+    redeeming = [
+        "cash management", "treasury", "liquidity", "payment rail",
+        "real-time payment", "virtual account", "api banking",
+        "open banking", "digital payment", "cross-border payment",
+        "settlement", "collection", "disbursement", "paynow",
+        "promptpay", "duitnow", "qris", "upi", "swift gpi",
+    ]
+    has_redeeming = any(r in combined for r in redeeming)
+
+    # Pure trade finance = has TF term AND no redeeming cash term
+    return not has_redeeming
+
 
 def apply_filters(sigs):
     out  = []
@@ -536,11 +639,18 @@ def apply_filters(sigs):
     for s in sigs:
         d = parse_date(s.get("date",""))
         if d and d < cutoff: continue
+        # Exclude pure trade finance signals
+        if _is_pure_trade_finance(s): continue
         if not geo_ok(s, geo_filter): continue
         if product_filter    and s.get("product_area","").strip() not in product_filter:    continue
         if type_filter       and s.get("signal_type","").strip()  not in type_filter:       continue
         if source_filter     and src_tag(s) not in source_filter:                           continue
-        if competitor_filter and s.get("entity","").strip() not in competitor_filter:       continue
+        # Competitor filter: match if entity maps to any selected canonical name
+        if competitor_filter:
+            raw_entity = s.get("entity","").strip()
+            canon_entity = _canonical_entity(raw_entity)
+            if canon_entity not in competitor_filter:
+                continue
         if s.get("relevance_score",0) < min_score:                                          continue
         # Dedup check — use same logic as load_signals
         k_text, k_url = _dedup_key(s)
@@ -558,8 +668,8 @@ fs = apply_filters(signals)
 # ═══════════════════════════════════════════
 with main_col:
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "◈  Overview", "⚡  Signals", "◎  Ask Intelligence", "▤  Weekly Digest"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "◈  Overview", "⚡  Signals", "◎  Ask Intelligence", "📚  Intelligence Library", "▤  Weekly Digest"
     ])
 
     # ═══════════════════
@@ -577,7 +687,7 @@ with main_col:
             st.markdown(f"""<div class="mcard teal">
                 <div class="mlbl">Total Signals</div>
                 <div class="mval">{total}</div>
-                <div class="msub">Last 30 days</div>
+                <div class="msub">Last 45 days</div>
             </div>""", unsafe_allow_html=True)
         with c2:
             is_hi = active_drill == "high"
@@ -671,14 +781,39 @@ with main_col:
                 st.markdown(bar_html(top_g, max(c for _,c in top_g)), unsafe_allow_html=True)
 
     # ═══════════════════
-    # TAB 2 — SIGNALS
-    # ═══════════════════
+    # TAB 2 — SIGNALS: Option A toggle (market signals vs competitive reference)
+    # ══════════════════════════════════════════════════════════════════════════
     with tab2:
-        h1, h2 = st.columns([4,1])
-        with h1:
-            st.markdown(f'<div class="sec-hdr">{len(fs)} signals · last 30 days · sorted by relevance</div>',
-                unsafe_allow_html=True)
-        with h2:
+        # Split filtered signals into dated vs undated
+        dated_fs   = [s for s in fs if s.get("date","").strip()]
+        undated_fs = [s for s in fs if not s.get("date","").strip()]
+
+        # Toggle state
+        if "sig_view" not in st.session_state:
+            st.session_state["sig_view"] = "market"
+
+        # Header row: toggle buttons + sort selector
+        tc1, tc2, tc3 = st.columns([3, 1.5, 1])
+        with tc1:
+            # Toggle buttons side by side
+            tb1, tb2 = st.columns(2)
+            with tb1:
+                mkt_label = f"Market signals  ({len(dated_fs)})"
+                if st.button(mkt_label, key="tog_market",
+                    type="primary" if st.session_state["sig_view"]=="market" else "secondary",
+                    use_container_width=True):
+                    st.session_state["sig_view"] = "market"
+                    st.session_state["sig_page"] = 1
+                    st.rerun()
+            with tb2:
+                ref_label = f"Competitive reference  ({len(undated_fs)})"
+                if st.button(ref_label, key="tog_ref",
+                    type="primary" if st.session_state["sig_view"]=="ref" else "secondary",
+                    use_container_width=True):
+                    st.session_state["sig_view"] = "ref"
+                    st.session_state["ref_page"] = 1
+                    st.rerun()
+        with tc3:
             sort_by = st.selectbox("sort_sig", options=["Relevance","Date","Entity","Geography"],
                 label_visibility="collapsed")
 
@@ -686,48 +821,93 @@ with main_col:
             gn = ["ASEAN-Wide (all markets + ASEAN impact)" if g=="ASEAN-Wide" else f"{g} only" for g in geo_filter]
             st.markdown(f'<div class="geo-note">🌏 {" · ".join(gn)}</div>', unsafe_allow_html=True)
 
-        disp = fs
-        if sort_by == "Date":        disp = sorted(fs, key=lambda x:x.get("date",""),reverse=True)
-        elif sort_by == "Entity":    disp = sorted(fs, key=lambda x:x.get("entity",""))
-        elif sort_by == "Geography": disp = sorted(fs, key=lambda x:x.get("geography",""))
+        # ── View A: Market Signals ──
+        if st.session_state["sig_view"] == "market":
+            st.markdown('''<div style="font-family:'IBM Plex Mono',monospace;font-size:7.5px;
+                letter-spacing:.1em;color:#475569;padding:5px 0 10px">
+                Dated signals only · last 45 days · sorted by relevance</div>''',
+                unsafe_allow_html=True)
 
-        if not disp:
-            st.markdown("""<div style="text-align:center;padding:60px 20px;color:#475569">
-                <div style="font-size:26px;margin-bottom:8px">◎</div>
-                <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em">
-                    NO SIGNALS MATCH YOUR FILTERS</div></div>""", unsafe_allow_html=True)
+            disp_dated = dated_fs
+            if sort_by == "Date":        disp_dated = sorted(dated_fs, key=lambda x:x.get("date",""), reverse=True)
+            elif sort_by == "Entity":    disp_dated = sorted(dated_fs, key=lambda x:x.get("entity",""))
+            elif sort_by == "Geography": disp_dated = sorted(dated_fs, key=lambda x:x.get("geography",""))
+
+            if not disp_dated:
+                st.markdown("""<div style="text-align:center;padding:40px 20px;color:#475569">
+                    <div style="font-size:22px;margin-bottom:8px">◎</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em">
+                        NO DATED SIGNALS MATCH YOUR FILTERS</div></div>""", unsafe_allow_html=True)
+            else:
+                paginated(disp_dated, "sig_page", "market signals")
+
+        # ── View B: Competitive Reference (quick access from Signals tab) ──
         else:
-            paginated(disp, "sig_page", "signals")
+            st.markdown(
+                '''<div style="font-family:'IBM Plex Mono',monospace;font-size:7.5px;
+                letter-spacing:.1em;color:#8b5cf6;padding:5px 0 4px">
+                Bank product pages, consultant PDFs, research reports · no publish date · not in digest</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:7.5px;
+                color:#475569;padding-bottom:10px">
+                For the full library view, see the 📚 Intelligence Library tab →</div>''',
+                unsafe_allow_html=True)
+
+            disp_undated = undated_fs
+            if sort_by == "Entity":    disp_undated = sorted(undated_fs, key=lambda x:x.get("entity",""))
+            elif sort_by == "Geography": disp_undated = sorted(undated_fs, key=lambda x:x.get("geography",""))
+
+            if not disp_undated:
+                st.markdown('''<div style="text-align:center;padding:40px 20px;color:#475569">
+                    <div style="font-size:22px;margin-bottom:8px">◎</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.12em">
+                        NO REFERENCE ITEMS MATCH YOUR FILTERS</div></div>''', unsafe_allow_html=True)
+            else:
+                paginated(disp_undated, "ref_page", "reference items")
 
     # ═══════════════════════
     # TAB 3 — ASK INTELLIGENCE
     # ═══════════════════════
     with tab3:
-        fresh_sigs = sorted([s for s in signals
-            if (lambda d: d is None or d>=cutoff)(parse_date(s.get("date","")))],
+        # Include: dated signals within 45 days + ALL undated signals
+        # (undated = bank product pages, PDFs, research — evergreen reference)
+        fresh_sigs = sorted(
+            [s for s in signals if (
+                not s.get("date","").strip() or  # undated: always include
+                (lambda d: d is not None and d >= cutoff)(parse_date(s.get("date","")))
+            )],
             key=lambda x:x.get("relevance_score",0), reverse=True)
+        dated_chat  = [s for s in fresh_sigs if s.get("date","").strip()]
+        undated_chat = [s for s in fresh_sigs if not s.get("date","").strip()]
 
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = []
 
-        st.markdown("""
+        st.markdown(f"""
         <div style="margin-bottom:10px">
             <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;
                  color:#f1f5f9;margin-bottom:2px">Ask Intelligence</div>
             <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10.5px;color:#475569">
-                Grounded in the last 30 days of signals only.</div>
+                {len(dated_chat)} market signals (last 45 days) + {len(undated_chat)} competitive reference items.</div>
         </div>""", unsafe_allow_html=True)
 
-        ci1, ci2, ci3 = st.columns([8,1,1])
-        with ci1:
-            user_input = st.text_input("chat_q",
-                placeholder="Ask about ASEAN cash management intelligence…",
-                label_visibility="collapsed", key="chat_input")
-        with ci2:
-            send = st.button("▶", type="primary", use_container_width=True, key="send_btn")
-        with ci3:
-            if st.button("⊘", use_container_width=True, key="clear_btn", help="Clear"):
-                st.session_state.chat_history = []; st.rerun()
+        # Input in st.form — Enter key or ▶ submits.
+        # ⊘ is a form_submit_button inside the same row — compact icon beside ▶.
+        # We detect which was pressed by checking the returned values.
+        with st.form("chat_form", clear_on_submit=True):
+            ci1, ci2, ci3 = st.columns([10, 1, 1])
+            with ci1:
+                user_input = st.text_input("chat_q",
+                    placeholder="Ask about ASEAN cash management intelligence… (press Enter or ▶)",
+                    label_visibility="collapsed", key="chat_input")
+            with ci2:
+                send = st.form_submit_button("▶", type="primary",
+                    use_container_width=True)
+            with ci3:
+                clear = st.form_submit_button("⊘", use_container_width=True,
+                    help="Clear conversation")
+
+        if clear:
+            st.session_state.chat_history = []; st.rerun()
 
         if send and user_input.strip():
             st.session_state.chat_history.insert(0, {
@@ -743,7 +923,7 @@ with main_col:
             Build 6 suggested queries that:
             1. Never reference Standard Chartered or blocked entities
             2. Are broad enough to always find matching signals
-            3. Are grounded in what actually exists in the last 30 days
+            3. Are grounded in what actually exists in the last 45 days
             """
             if not sigs:
                 return []
@@ -813,22 +993,65 @@ with main_col:
 
             return cands[:6]
 
+        # Category tag — derived from query content so it always
+        # reflects what the signal actually covers
+        def _preset_tag(q):
+            q = q.lower()
+            if any(w in q for w in ("regulat","compliance","mandate","policy")):
+                return ("REGULATORY", "#8b5cf6")
+            if any(w in q for w in ("innovation","real-time","api","digital")):
+                return ("INNOVATION", "#f59e0b")
+            if any(w in q for w in ("what is","bca","dbs","hsbc","jpmorgan",
+                                     "deutsche","bangkok bank","doing in")):
+                return ("COMPETITOR", "#00c2a8")
+            return ("MARKET", "#2563eb")
+
         presets = build_presets(fresh_sigs)
+
+        # Check if a preset was clicked via session state key
+        for pi, pq in enumerate(presets):
+            if st.session_state.get(f"_preset_clicked_{pi}"):
+                st.session_state[f"_preset_clicked_{pi}"] = False
+                st.session_state.chat_history.insert(0, {
+                    "role":"user","content":pq,
+                    "answer":None,"sources":None,"error":None})
+                st.rerun()
+
         if presets and not st.session_state.chat_history:
-            st.markdown('''<div class="sec-hdr" style="margin-top:10px">Suggested queries
-                — click any to ask</div>''', unsafe_allow_html=True)
-            # Render as single-column left-aligned list for clean readability
-            for i, p in enumerate(presets):
-                col_btn, col_spacer = st.columns([4, 1])
-                with col_btn:
-                    if st.button(
-                        f"› {p}", key=f"preset_{i}",
-                        use_container_width=True, type="secondary"
-                    ):
-                        st.session_state.chat_history.insert(0, {
-                            "role":"user","content":p,
-                            "answer":None,"sources":None,"error":None})
-                        st.rerun()
+            st.markdown('''<div style="font-family:'IBM Plex Mono',monospace;font-size:8px;
+                letter-spacing:.14em;text-transform:uppercase;color:#475569;
+                margin-top:12px;margin-bottom:6px">
+                Suggested queries — click any to ask</div>''', unsafe_allow_html=True)
+
+            # Render as 2-column grid using st.columns + st.button
+            # st.button text is always left-aligned via CSS override on the p tag.
+            # We use a per-button CSS class hack to force left via session_state.
+            pairs = list(zip(presets[::2], presets[1::2]))
+            if len(presets) % 2:
+                pairs.append((presets[-1], None))
+
+            for row_i, (left_q, right_q) in enumerate(pairs):
+                col_a, col_b = st.columns(2)
+                for col, q in [(col_a, left_q), (col_b, right_q)]:
+                    if q is None:
+                        continue
+                    pi = presets.index(q)
+                    tag_label, tag_color = _preset_tag(q)
+                    with col:
+                        # Tag label above button
+                        st.markdown(
+                            f'<div style="font-family:IBM Plex Mono,monospace;'
+                            f'font-size:7.5px;font-weight:600;letter-spacing:.1em;'
+                            f'color:{tag_color};margin-bottom:3px;text-transform:uppercase">'+
+                            tag_label+'</div>',
+                            unsafe_allow_html=True)
+                        # Use st.button — left-align enforced via CSS p selector
+                        if st.button(q, key=f"preset_{pi}",
+                                     use_container_width=True, type="secondary"):
+                            st.session_state.chat_history.insert(0, {
+                                "role":"user","content":q,
+                                "answer":None,"sources":None,"error":None})
+                            st.rerun()
 
         for i, msg in enumerate(st.session_state.chat_history):
             if msg.get("role")=="user" and msg.get("answer") is None and msg.get("error") is None:
@@ -843,16 +1066,18 @@ with main_col:
                     for attempt in range(3):
                         try:
                             r=anthropic_client.messages.create(
-                                model="claude-sonnet-4-5", max_tokens=800,
+                                model="claude-sonnet-4-5", max_tokens=2500,
                                 messages=[{"role":"user","content":(
                                     "You are a senior transaction banking analyst covering ASEAN Cash Management.\n"
-                                    "Answer using only the intelligence signals below (last 30 days).\n"
+                                    "Answer using the intelligence signals below. Two types are included:\n"
+                                    "1. DATED signals (last 45 days) — recent news, regulatory updates, product launches.\n"
+                                    "2. UNDATED signals — evergreen reference: bank product pages, consultant PDFs, research reports. No date but always valid context.\n"
                                     "Signals marked ASEAN Impact: True are relevant even if non-ASEAN origin.\n"
-                                    "Be direct, cite entities, geographies, and dates.\n"
-                                    "Weight consultant/PDF signals higher.\n"
+                                    "Be direct, cite entities, geographies, and dates where available.\n"
+                                    "Weight consultant/PDF signals higher. Flag undated signals as reference context.\n"
                                     "End with: 'Implication for Transaction Banks:' on a new line.\n"
                                     "If insufficient signals, say so clearly.\n\n"
-                                    f"Question: {msg['content']}\n\nSignals:\n{ctx[:6000]}"
+                                    f"Question: {msg['content']}\n\nSignals:\n{ctx[:100000]}"
                                 )}])
                             answer=r.content[0].text.strip(); err=None; break
                         except Exception as ex:
@@ -892,17 +1117,117 @@ with main_col:
         if not fresh_sigs:
             st.warning("No signals available. Run the pipeline first.")
 
-    # ═══════════════════════
-    # TAB 4 — WEEKLY DIGEST
-    # ═══════════════════════
+    # ═══════════════════════════════
+    # TAB 4 — INTELLIGENCE LIBRARY
+    # ═══════════════════════════════
     with tab4:
+        all_undated = sorted(
+            [s for s in signals if not s.get("date","").strip()],
+            key=lambda x: x.get("relevance_score",0), reverse=True
+        )
+        lib_product  = [s for s in all_undated
+                        if s.get("source_type","") == "bank-product"
+                        or s.get("type","") in ("scrape-static","scrape")]
+        lib_research = [s for s in all_undated if s not in lib_product]
+
+        st.markdown("""
+        <div style="margin-bottom:14px">
+            <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;
+                 color:#f1f5f9;margin-bottom:2px">Intelligence Library</div>
+            <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10.5px;color:#475569">
+                Evergreen reference content — no publish date. Use for context before meetings
+                or when building competitive briefs. Also included in Ask Intelligence answers.</div>
+        </div>""", unsafe_allow_html=True)
+
+        # ── Section 1: Competitor product pages ──
+        st.markdown(f'''<div style="display:flex;align-items:center;justify-content:space-between;
+            font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.16em;
+            text-transform:uppercase;color:#f59e0b;
+            padding:8px 0 6px;border-bottom:1px solid #1e2a3a;margin-bottom:12px">
+            <span>&#127970; Competitor product pages</span>
+            <span style="background:rgba(245,158,11,.1);color:#f59e0b;padding:2px 8px;
+                border-radius:3px;font-size:7.5px">{len(lib_product)} items</span>
+        </div>''', unsafe_allow_html=True)
+
+        if lib_product:
+            for s in lib_product:
+                url    = s.get("url","")
+                link   = f'<a class="sc-src-lnk" href="{url}" target="_blank">&#8599; View</a>' if url and not url.startswith("local://") else ""
+                entity = s.get("entity","") or ""
+                geo    = s.get("geography","") or ""
+                sig    = (s.get("key_signal","") or "")[:120]
+                sw     = (s.get("so_what","") or "")[:120]
+                st.markdown(f'''<div style="background:#131a2e;border:1px solid #253348;
+                    border-left:3px solid #f59e0b;border-radius:6px;
+                    padding:10px 12px;margin-bottom:7px">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                        <div>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;
+                                background:rgba(245,158,11,.1);color:#f59e0b;
+                                padding:2px 6px;border-radius:2px;margin-right:5px">{entity}</span>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;
+                                color:#475569">{geo}</span>
+                        </div>
+                        {link}
+                    </div>
+                    <div style="font-size:12px;font-weight:500;color:#f1f5f9;
+                        line-height:1.45;margin-bottom:4px">{sig}</div>
+                    <div style="font-size:11px;color:#94a3b8;line-height:1.5">
+                        <span style="color:#00c2a8;font-weight:500">So what:</span> {sw}</div>
+                </div>''', unsafe_allow_html=True)
+        else:
+            st.info("No competitor product pages found. Run the pipeline to populate.")
+
+        # ── Section 2: Research reports & PDFs ──
+        st.markdown(f'''<div style="display:flex;align-items:center;justify-content:space-between;
+            font-family:'IBM Plex Mono',monospace;font-size:8px;letter-spacing:.16em;
+            text-transform:uppercase;color:#8b5cf6;
+            padding:8px 0 6px;border-bottom:1px solid #1e2a3a;margin:20px 0 12px">
+            <span>&#128196; Research reports &amp; PDFs</span>
+            <span style="background:rgba(139,92,246,.1);color:#8b5cf6;padding:2px 8px;
+                border-radius:3px;font-size:7.5px">{len(lib_research)} items</span>
+        </div>''', unsafe_allow_html=True)
+
+        if lib_research:
+            for s in lib_research:
+                url    = s.get("url","")
+                link   = f'<a class="sc-src-lnk" href="{url}" target="_blank">&#8599; View</a>' if url and not url.startswith("local://") else ""
+                entity = s.get("entity","") or (s.get("source","") or "")[:40]
+                geo    = s.get("geography","") or ""
+                sig    = (s.get("key_signal","") or "")[:120]
+                sw     = (s.get("so_what","") or "")[:120]
+                st.markdown(f'''<div style="background:#131a2e;border:1px solid #253348;
+                    border-left:3px solid #8b5cf6;border-radius:6px;
+                    padding:10px 12px;margin-bottom:7px">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                        <div>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;
+                                background:rgba(139,92,246,.1);color:#8b5cf6;
+                                padding:2px 6px;border-radius:2px;margin-right:5px">{entity}</span>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;
+                                color:#475569">{geo}</span>
+                        </div>
+                        {link}
+                    </div>
+                    <div style="font-size:12px;font-weight:500;color:#f1f5f9;
+                        line-height:1.45;margin-bottom:4px">{sig}</div>
+                    <div style="font-size:11px;color:#94a3b8;line-height:1.5">
+                        <span style="color:#00c2a8;font-weight:500">So what:</span> {sw}</div>
+                </div>''', unsafe_allow_html=True)
+        else:
+            st.info("No research reports found. Add PDF URLs to sources.py or drop PDFs in documents/ folder.")
+
+    # ═══════════════════════
+    # TAB 5 — WEEKLY DIGEST
+    # ═══════════════════════
+    with tab5:
         d1, d2 = st.columns([4,1])
         with d1:
             st.markdown("""
             <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;
                  color:#f1f5f9;margin-bottom:2px">Weekly Intelligence Digest</div>
             <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10.5px;color:#475569">
-                Auto-generated from the last 30 days · Includes consultant reports and PDFs</div>
+                Auto-generated from the last 45 days · Includes consultant reports and PDFs</div>
             """, unsafe_allow_html=True)
 
         dfiles = sorted(glob.glob("digest_*.md"), reverse=True)

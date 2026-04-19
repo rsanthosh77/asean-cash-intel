@@ -8,25 +8,65 @@ client = anthropic.Anthropic()
 
 def generate_digest(signals):
 
-    cutoff = datetime.now() - timedelta(days=30)
+    cutoff = datetime.now() - timedelta(days=45)
+    today  = datetime.now().date()
+
+    def _parse_date(ds):
+        """Parse any date format, always return timezone-naive datetime or None."""
+        if not ds: return None
+        for s in [ds.strip(), ds[:25].strip()]:
+            for fmt in (
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M:%S.%f",
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d",
+                "%a, %d %b %Y %H:%M:%S %Z",
+                "%a, %d %b %Y %H:%M:%S %z",
+                "%a, %d %b %Y %H:%M:%S",
+                "%d %b %Y",
+                "%B %d, %Y",
+            ):
+                try:
+                    return datetime.strptime(s, fmt).replace(tzinfo=None)
+                except Exception:
+                    pass
+        return None
+
     recent = []
+    excluded_static = 0
     for s in signals:
         date_str = s.get("date", "")
+        sig_type = s.get("type", "")
+
+        # Empty date = genuinely undated (PDFs, static pages after fix)
+        # Include them — extract.py will judge relevance
         if not date_str:
             recent.append(s)
             continue
-        for fmt in (
-            "%Y-%m-%dT%H:%M:%S",
-            "%Y-%m-%d",
-            "%Y-%m-%d %H:%M:%S.%f"
-        ):
-            try:
-                d = datetime.strptime(date_str[:25].strip(), fmt)
-                if d >= cutoff:
-                    recent.append(s)
-                break
-            except Exception:
-                continue
+
+        d = _parse_date(date_str)
+        if d is None:
+            # Unparseable date — include conservatively
+            recent.append(s)
+            continue
+
+        # Exclude signals where the date is today AND type is static/pdf
+        # These are old content re-stamped by ingest.py (pre-fix runs)
+        is_synthetic_date = (
+            d.date() == today and
+            sig_type in ("scrape-static", "scrape", "pdf",
+                         "pdf-direct", "pdf-local")
+        )
+        if is_synthetic_date:
+            excluded_static += 1
+            continue
+
+        if d >= cutoff:
+            recent.append(s)
+
+    if excluded_static:
+        print(f"   ⚠️  Excluded {excluded_static} signals with synthetic today-date "
+              f"(old static pages re-stamped by ingest — re-run ingest.py to fix)")
 
     if not recent:
         print("⚠️  No signals within last 30 days — using all signals")

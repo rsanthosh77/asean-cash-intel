@@ -114,21 +114,35 @@ SCORING RULES:
 2 = Loosely related, low urgency
 1 = Minimal relevance
 
-Be generous with relevance — mark as relevant if the content touches on:
+Mark as relevant ONLY if the content directly touches on:
 - Cash management, liquidity, treasury
-- Payments, collections, settlements
+- Payments, collections, settlements (including real-time rails)
 - Virtual accounts, notional pooling
 - API banking, open banking, ERP integration
 - Cross-border payments, FX, hedging
-- Digital banking, fintech, embedded finance
-- ASEAN banking regulation, central bank updates
+- Digital banking, fintech, embedded finance relevant to cash/payments
+- ASEAN banking regulation affecting cash management or payments
 - Consultant research on banking or payments trends
-- Any bank or fintech operating in ASEAN
 - AI or machine learning applied to banking or treasury
-- Digital assets, tokenisation, CBDC
-- Real-time payment rails in ASEAN
+- Digital assets, tokenisation, CBDC with cash management implications
+- Real-time payment rails in ASEAN (PayNow, PromptPay, DuitNow, QRIS, UPI)
 
-Only set relevant to false if completely unrelated to banking, finance, or technology.
+Set relevant to FALSE for:
+- Pure trade finance content (letters of credit, bills of lading,
+  documentary collections, trade document frameworks, supply chain
+  finance, receivables financing) UNLESS the signal also directly
+  discusses cash management, treasury, or payments infrastructure
+- Equity capital markets, M&A, investment banking
+- Insurance products
+- Content completely unrelated to banking or finance
+
+SOURCE TYPE GUIDANCE — set source_type accordingly:
+- content_type "scrape-static" or "scrape": static bank product/service page.
+  Set source_type to "bank-product". Cap relevance_score at 3 unless a
+  clear new product launch is evident in the text.
+- content_type "pdf", "pdf-direct", "pdf-local": research/regulatory document.
+  Set source_type to "pdf". Score 3-5 based on analytical depth.
+- content_type "rss" or "scrape-deep": news article. Score normally 1-5.
 
 Content type: {content_type}
 Content:
@@ -310,6 +324,23 @@ def extract_all(articles):
                 print(f"  ⟳ Duplicate skipped: {title[:60]}")
                 continue
             seen_keys.add(dk)
+
+            # Sanitise date: static/product pages have no real publish date.
+            # If the ingest type suggests a static page and the date looks
+            # like a synthetic datetime stamp, clear it so the digest
+            # doesn't treat it as fresh news.
+            article_type = article.get("type", "")
+            article_date = article.get("date", "")
+            STATIC_TYPES = {"scrape-static", "scrape", "pdf",
+                            "pdf-direct", "pdf-local"}
+            is_synthetic = (
+                article_type in STATIC_TYPES and
+                article_date and
+                " " in article_date and   # datetime has a space: "2026-04-17 14:32:..."
+                article_date[:10] == article_date[:10]  # sanity
+            )
+            if is_synthetic:
+                article = {**article, "date": ""}
 
             results.append({**article, **signal})
             print(
