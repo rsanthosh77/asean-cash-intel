@@ -18,7 +18,7 @@ Return ONLY valid JSON in this exact format, with no other text:
 
 {{
   "relevant": true or false,
-  "entity": "name of bank, regulator, consultant firm, or fintech mentioned",
+  "entity": "see entity rules below",
   "geography": "see geography rules below",
   "asean_impact": true or false,
   "product_area": "see product area rules below",
@@ -28,6 +28,23 @@ Return ONLY valid JSON in this exact format, with no other text:
   "relevance_score": a number from 1 to 5,
   "source_type": "one of: news | consultant-report | regulatory | bank-product | pdf | other"
 }}
+
+ENTITY RULES — follow exactly:
+- Return the name of the SINGLE most important bank, regulator, fintech,
+  or financial institution that is the primary actor in this signal.
+- ONE organisation only. If multiple organisations are involved, pick the
+  primary actor — the one taking the action or announcing the change.
+- Use the clean, commonly known short name:
+  "DBS" not "DBS Bank Ltd", "HSBC" not "HSBC Holdings plc",
+  "J.P. Morgan" not "JPMorgan Chase & Co.",
+  "Standard Chartered" not "Standard Chartered Bank",
+  "BCA" not "PT Bank Central Asia Tbk"
+- Do NOT include: media companies (Reuters, Bloomberg, Finextra, Asian Banker),
+  social media platforms (Twitter, X, LinkedIn), analytics or marketing firms
+  (AppsFlyer, Google Analytics), universities or research labs (MIT, Stanford),
+  or any entity not directly involved in banking, payments, or financial regulation.
+- If the signal is about industry-wide trends with no single primary actor,
+  use the most relevant regulatory body or industry group.
 
 PRODUCT AREA RULES — assign the single best-matching category:
 
@@ -59,11 +76,6 @@ PRODUCT AREA RULES — assign the single best-matching category:
   → Foreign exchange, FX, currency conversion, hedging, forwards, swaps,
     multi-currency accounts, currency risk, FX overlay, cross-currency pooling
 
-"Regulatory"
-  → Central bank guidelines, compliance requirements, AML, KYC, sanctions,
-    data localisation, open banking mandates, licensing, regulatory sandbox,
-    consultation papers, SNAP API mandate, reporting requirements
-
 "Innovation"
   → ANY of the following topics MUST be tagged Innovation:
     - Digital assets, tokenisation, tokenized deposits, stablecoins, CBDC,
@@ -75,18 +87,28 @@ PRODUCT AREA RULES — assign the single best-matching category:
     - Quantum computing in finance
     - New fintech business models disrupting cash management
 
-"Market Research"
-  → Industry surveys, benchmarks, research reports, market sizing,
-    analyst forecasts, consultant whitepapers that do not fit the above
-
 "Other"
   → Use only when none of the above apply at all
 
-IMPORTANT: If a signal mentions APIs, open banking, or ERP connectivity
-it MUST be tagged "API Banking" not "Other". If it mentions AI, tokenisation,
-or digital assets in a cash management context it MUST be tagged "Innovation".
-If it mentions PayNow, PromptPay, DuitNow, QRIS, UPI, or any real-time
-payment rail linkage it MUST be tagged "Payments & Collections" AND scored 5.
+IMPORTANT PRODUCT AREA NOTES:
+- Do NOT use "Regulatory" as a product area. Instead, tag the signal to the
+  product area the regulation affects:
+    · A central bank mandate on open banking APIs → "API Banking"
+    · A payment scheme circular or real-time rail guideline → "Payments & Collections"
+    · A liquidity coverage ratio rule → "Liquidity Management"
+    · A CBDC or digital asset framework → "Innovation"
+    · A KYC/AML/sanctions update with no specific product area → "Other"
+- Do NOT use "Market Research" as a product area. Instead, tag the signal to
+  the product area the research covers:
+    · A McKinsey report on cross-border payments → "Payments & Collections"
+    · A BIS paper on CBDC → "Innovation"
+    · A consultant report spanning all cash management broadly → "Other"
+- If a signal mentions APIs, open banking, or ERP connectivity it MUST be
+  tagged "API Banking" not "Other".
+- If it mentions AI, tokenisation, or digital assets in a cash management
+  context it MUST be tagged "Innovation".
+- If it mentions PayNow, PromptPay, DuitNow, QRIS, UPI, or any real-time
+  payment rail linkage it MUST be tagged "Payments & Collections" AND scored 5.
 
 GEOGRAPHY RULES — follow exactly:
 
@@ -135,6 +157,8 @@ Set relevant to FALSE for:
 - Equity capital markets, M&A, investment banking
 - Insurance products
 - Content completely unrelated to banking or finance
+- Social media platforms, marketing technology, analytics tools,
+  consumer apps with no direct banking or payments angle
 
 SOURCE TYPE GUIDANCE — set source_type accordingly:
 - content_type "scrape-static" or "scrape": static bank product/service page.
@@ -157,16 +181,16 @@ ASEAN_COUNTRIES = {
 }
 ASEAN_ALL = ASEAN_COUNTRIES | {"ASEAN-Wide"}
 
-# Canonical product areas
+# Valid product areas — Regulatory and Market Research removed.
+# Signals previously tagged those will now be tagged to the specific
+# product area they affect, or "Other" if truly cross-cutting.
 VALID_PRODUCT_AREAS = {
     "Liquidity Management",
     "Payments & Collections",
     "Virtual Accounts",
     "API Banking",
     "FX & Hedging",
-    "Regulatory",
     "Innovation",
-    "Market Research",
     "Other"
 }
 
@@ -193,6 +217,58 @@ REALTIME_RAIL_KEYWORDS = [
     "payment rail", "rail linkage", "rail integration",
     "mbridge", "project nexus"
 ]
+
+# ── Entity canonicalisation ───────────────────────────────────────────────────
+# Applied post-extraction to normalise known entity variants.
+# Add new aliases here as Claude introduces new variants in future runs.
+ENTITY_ALIASES = {
+    "j.p. morgan chase":                      "J.P. Morgan",
+    "jp morgan chase":                        "J.P. Morgan",
+    "j.p.morgan":                             "J.P. Morgan",
+    "jpmorgan":                               "J.P. Morgan",
+    "jpmorgan chase":                         "J.P. Morgan",
+    "j.p. morgan chase & co.":               "J.P. Morgan",
+    "dbs bank":                               "DBS",
+    "dbs bank ltd":                           "DBS",
+    "hsbc singapore":                         "HSBC",
+    "hsbc holdings":                          "HSBC",
+    "hsbc holdings plc":                      "HSBC",
+    "standard chartered bank":               "Standard Chartered",
+    "stanchart":                              "Standard Chartered",
+    "pt bank central asia tbk (bca)":        "BCA",
+    "pt bank central asia":                  "BCA",
+    "bank central asia":                     "BCA",
+    "basel committee on banking supervision": "Basel Committee",
+    "mobifone digital payments joint stock company": "MobiFone Digital Payments",
+    "mobifone digital payments jsc":          "MobiFone Digital Payments",
+    "international monetary fund (imf)":      "IMF",
+    "international monetary fund":            "IMF",
+    "kasikornbank (kbank)":                   "KBank",
+    "kasikornbank":                           "KBank",
+    "thailand securities and exchange commission": "Thailand SEC",
+    "bangko sentral ng pilipinas":            "BSP",
+    "bank negara malaysia":                   "BNM",
+    "monetary authority of singapore":        "MAS",
+    "bank of thailand":                       "BOT",
+}
+
+# Entities that should never appear as the primary entity in a signal —
+# not competitors, regulators, fintechs, or relevant banking bodies.
+ENTITY_BLOCKLIST = {
+    "x (formerly twitter)", "twitter", "x corp",
+    "google", "alphabet",
+    "appsflyer",
+    "mit", "massachusetts institute of technology",
+    "the fintech times",
+    "trade finance global",
+}
+
+def canonicalise_entity(entity):
+    """Normalise entity name to canonical form using alias table."""
+    if not entity:
+        return entity
+    canon = ENTITY_ALIASES.get(entity.strip().lower(), entity.strip())
+    return canon
 
 def normalise_geography(geo_raw):
     if not geo_raw:
@@ -222,10 +298,12 @@ def override_product_area(result, full_text):
     """
     Post-process product area to catch cases Claude might miss.
     Checks key_signal + so_what + title text for forcing keywords.
+    Also maps any legacy "Regulatory" or "Market Research" tags
+    to "Other" as a safety net in case Claude still returns them.
     """
     text_lower = full_text.lower()
 
-    # Innovation override
+    # Innovation override — checked first, highest priority
     for kw in INNOVATION_KEYWORDS:
         if kw in text_lower:
             return "Innovation"
@@ -235,9 +313,11 @@ def override_product_area(result, full_text):
         if kw in text_lower:
             return "API Banking"
 
-    # Validate against known list
+    # Validate against known list — map legacy/invalid values to Other
     pa = result.get("product_area", "Other")
     if pa not in VALID_PRODUCT_AREAS:
+        # Legacy catch: Regulatory and Market Research → Other
+        # (prompt now instructs Claude not to use these, but belt-and-braces)
         return "Other"
 
     return pa
@@ -260,7 +340,7 @@ def extract_signal(article):
     )
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-6",
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -275,6 +355,13 @@ def extract_signal(article):
 
         if result.get("relevant"):
             result["geography"] = normalise_geography(result.get("geography", ""))
+
+            # Canonicalise entity — normalise known variants
+            result["entity"] = canonicalise_entity(result.get("entity", ""))
+
+            # Block irrelevant entities — clear them rather than carry noise
+            if result.get("entity", "").lower() in ENTITY_BLOCKLIST:
+                result["entity"] = ""
 
             # Build combined text for override checks
             check_text = " ".join([
@@ -326,9 +413,6 @@ def extract_all(articles):
             seen_keys.add(dk)
 
             # Sanitise date: static/product pages have no real publish date.
-            # If the ingest type suggests a static page and the date looks
-            # like a synthetic datetime stamp, clear it so the digest
-            # doesn't treat it as fresh news.
             article_type = article.get("type", "")
             article_date = article.get("date", "")
             STATIC_TYPES = {"scrape-static", "scrape", "pdf",
@@ -336,8 +420,8 @@ def extract_all(articles):
             is_synthetic = (
                 article_type in STATIC_TYPES and
                 article_date and
-                " " in article_date and   # datetime has a space: "2026-04-17 14:32:..."
-                article_date[:10] == article_date[:10]  # sanity
+                " " in article_date and
+                article_date[:10] == article_date[:10]
             )
             if is_synthetic:
                 article = {**article, "date": ""}

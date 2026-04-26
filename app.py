@@ -834,19 +834,80 @@ def geo_ok(signal, sel):
     return False
 
 
+# Entities that should never appear in the competitor/regulator dropdown —
+# not a competitor, regulator, fintech, or relevant banking body
+_DROPDOWN_BLOCKLIST = {
+    "x (formerly twitter)", "twitter",
+    "appsflyer and google", "appsflyer", "google",
+    "mit",
+    "the fintech times",
+    "trade finance global",
+    "kansas city fed",     # not ASEAN-relevant
+}
+
 def _canonical_entity(name):
+    """Return canonical form of an entity name. Also splits multi-entity strings."""
     name = name.strip()
     aliases = {
+        # J.P. Morgan variants
         "j.p. morgan chase":          "J.P. Morgan",
         "jp morgan chase":            "J.P. Morgan",
         "j.p.morgan":                 "J.P. Morgan",
         "jpmorgan":                   "J.P. Morgan",
         "jpmorgan chase":             "J.P. Morgan",
         "j.p. morgan chase & co.":    "J.P. Morgan",
+        # DBS variants
+        "dbs bank":                   "DBS",
+        # HSBC variants
+        "hsbc singapore":             "HSBC",
+        # Standard Chartered variants
+        "standard chartered bank":    "Standard Chartered",
+        # BCA variants
+        "pt bank central asia tbk (bca)": "BCA",
+        # Basel variants
+        "basel committee on banking supervision": "Basel Committee",
+        # MobiFone variants
         "mobifone digital payments joint stock company": "MobiFone Digital Payments",
         "mobifone digital payments jsc":                 "MobiFone Digital Payments",
+        # IMF full name
+        "international monetary fund (imf)": "IMF",
+        # KBank full name
+        "kasikornbank (kbank)": "KBank",
+        # Thailand SEC — contains "and", must not be split
+        "thailand securities and exchange commission": "Thailand SEC",
+        # ASEAN Finance Ministers — contains "and", must not be split
+        "asean finance ministers and central bank governors": "ASEAN Finance Ministers & Central Bank Governors",
     }
     return aliases.get(name.lower(), name)
+
+# Entities whose full name contains " and " but must NOT be split —
+# pre-canonicalise these before attempting the split
+_NO_SPLIT = {
+    "asean finance ministers and central bank governors",
+    "thailand securities and exchange commission",
+    "appsflyer and google",   # blocklisted anyway but guard it
+}
+
+def _split_entities(raw):
+    """
+    Split a multi-entity string like "HSBC, Standard Chartered, HKMA"
+    into individual canonical entity names.
+    Preserves known multi-word org names that contain "and".
+    Returns a list of one or more canonical names.
+    """
+    import re as _re2
+    # If the whole string is a known no-split org, canonicalise directly
+    if raw.strip().lower() in _NO_SPLIT:
+        canon = _canonical_entity(raw.strip())
+        return [canon]
+    # Otherwise split on comma, slash, " and ", " & "
+    parts = _re2.split(r",|/| and | & ", raw)
+    result = []
+    for p in parts:
+        p = p.strip()
+        if p:
+            result.append(_canonical_entity(p))
+    return result if result else [_canonical_entity(raw)]
 
 def geo_cls(geo):
     if geo == "ASEAN-Wide": return "tag-geo-wide"
@@ -906,9 +967,52 @@ def paginated(items, pkey, label="signals"):
             if st.button("Next →", key=f"{pkey}_n", disabled=(p>=pages)):
                 st.session_state[pkey] += 1; st.rerun()
 
+# Smart abbreviation lookup for bar chart labels —
+# replaces hard character truncation with meaningful short forms.
+# Add new entries here as new entities appear in future pipeline runs.
+_BAR_ABBREV = {
+    "standard chartered":                          "StanChart",
+    "standard chartered bank":                     "StanChart",
+    "j.p. morgan":                                 "JPMorgan",
+    "jpmorgan":                                    "JPMorgan",
+    "jpmorgan chase":                              "JPMorgan",
+    "deutsche bank":                               "Deutsche",
+    "bangko sentral ng pilipinas":                 "BSP",
+    "bank indonesia":                              "Bank Indo",
+    "bank of france":                              "Banque de France",
+    "bis innovation hub":                          "BIS Hub",
+    "basel committee":                             "Basel Cmte",
+    "basel committee on banking supervision":      "Basel Cmte",
+    "g7 working group on stablecoins":             "G7 Stablecoins",
+    "asean finance ministers & central bank governors": "ASEAN Fin. Ministers",
+    "asean finance ministers and central bank governors": "ASEAN Fin. Ministers",
+    "mobifone digital payments":                   "MobiFone",
+    "mobifone digital payments joint stock company": "MobiFone",
+    "reserve bank of india":                       "RBI",
+    "international monetary fund (imf)":           "IMF",
+    "international monetary fund":                 "IMF",
+    "kasikornbank (kbank)":                        "KBank",
+    "kasikornbank":                                "KBank",
+    "thailand sec":                                "Thailand SEC",
+    "thailand securities and exchange commission": "Thailand SEC",
+    "federal reserve":                             "Fed Reserve",
+    "kansas city fed":                             "KC Fed",
+    "pt bank central asia tbk (bca)":              "BCA",
+    "pt bank central asia":                        "BCA",
+    "cpmi-iosco":                                  "CPMI-IOSCO",
+    "google pay":                                  "Google Pay",
+}
+
+def _bar_label(name):
+    """Return smart abbreviation if available, else truncate at 14 chars."""
+    abbrev = _BAR_ABBREV.get(name.lower())
+    if abbrev:
+        return abbrev
+    return name if len(name) <= 14 else name[:13] + "…"
+
 def bar_html(items, mx):
     rows = "".join(
-        f'<div class="bar-row"><div class="bar-lbl">{l[:14]}</div>'
+        f'<div class="bar-row"><div class="bar-lbl">{_bar_label(l)}</div>'
         f'<div class="bar-bg"><div class="bar-fill" style="width:{int(c/mx*100) if mx else 0}%">'
         f'</div></div><div class="bar-n">{c}</div></div>'
         for l,c in items)
@@ -964,9 +1068,14 @@ with sidebar_col:
     geo_filter = st.multiselect(
         "Geography", options=GEO_OPTIONS, key="f_geo", placeholder="All markets"
     )
+    # Exclude Regulatory and Market Research from product area dropdown —
+    # these are signal classification categories, not product areas.
+    # They are already covered by the Signal Type and Source Type filters.
+    _EXCL_PRODUCT_AREAS = {"Regulatory", "Market Research"}
     prod_opts = sorted(set(
         s.get("product_area","").strip() for s in signals
         if s.get("product_area","").strip()
+        and s.get("product_area","").strip() not in _EXCL_PRODUCT_AREAS
     ))
     product_filter = st.multiselect(
         "Product Area", options=prod_opts, key="f_prod", placeholder="All areas"
@@ -982,13 +1091,19 @@ with sidebar_col:
         "Source Type", options=["news","pdf","consultant","regulatory","bank-product"],
         key="f_src", placeholder="All sources"
     )
-    comp_opts = sorted(set(
-        _canonical_entity(s.get("entity","").strip())
-        for s in signals if s.get("entity","").strip()
-    ))
+    # Build dropdown options: split multi-entity fields, canonicalise,
+    # remove blocklisted entries (not competitors/regulators/fintechs)
+    _comp_set = set()
+    for s in signals:
+        raw = s.get("entity","").strip()
+        if not raw: continue
+        for canon in _split_entities(raw):
+            if canon.lower() not in _DROPDOWN_BLOCKLIST:
+                _comp_set.add(canon)
+    comp_opts = sorted(_comp_set)
     competitor_filter = st.multiselect(
-        "Competitor / Regulator", options=comp_opts, key="f_comp",
-        placeholder="All competitors & regulators"
+        "Competitors, Fintechs & Regulators", options=comp_opts, key="f_comp",
+        placeholder="All competitors, fintechs & regulators"
     )
     min_score = st.slider("Min Score", min_value=1, max_value=5, value=1, key="f_score")
 
@@ -1053,8 +1168,9 @@ def apply_filters(sigs):
         if source_filter     and src_tag(s) not in source_filter:                           continue
         if competitor_filter:
             raw_entity = s.get("entity","").strip()
-            canon_entity = _canonical_entity(raw_entity)
-            if canon_entity not in competitor_filter:
+            # Split multi-entity signals and check if ANY match the filter
+            entity_parts = _split_entities(raw_entity) if raw_entity else []
+            if not any(e in competitor_filter for e in entity_parts):
                 continue
         if s.get("relevance_score",0) < min_score:                                          continue
         k_text, k_url = _dedup_key(s)
@@ -1159,7 +1275,7 @@ with main_col:
                 st.info("No signals match your current filters.")
 
         with rc:
-            st.markdown('<div class="sec-hdr">Competitor Activity</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-hdr">Competitors, Fintechs &amp; Regulators Activity</div>', unsafe_allow_html=True)
             ec = {}
             for s in fs:
                 e = s.get("entity","")
@@ -1175,7 +1291,7 @@ with main_col:
                                          max(sc2.values())), unsafe_allow_html=True)
 
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="sec-hdr">Geography Breakdown</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-hdr">Where Signals Come From</div>', unsafe_allow_html=True)
             gc = {}
             for s in fs:
                 g = s.get("geography","")
