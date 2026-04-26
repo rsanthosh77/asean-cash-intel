@@ -5,6 +5,5 @@ __pycache__/
 .DS_Store
 documents/
 raw_articles.json
-extracted_signals.json
 
 
