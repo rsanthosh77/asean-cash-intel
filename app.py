@@ -1746,11 +1746,25 @@ with main_col:
                     f'letter-spacing:0.07em;text-transform:uppercase;color:{color};'
                     f'margin-top:8px;margin-bottom:6px;padding-bottom:5px;'
                     f'border-bottom:1px solid var(--bd)">{title}</div>', unsafe_allow_html=True)
-                bullets=[l.lstrip("-•").strip() for l in body.split("\n") if l.strip().startswith(("-","•"))]
+                # Parse bullets: handle hyphen (-), bullet (•), and em dash (—)
+                # Skip lines that are empty after stripping the bullet character
+                bullets = []
+                for l in body.split("\n"):
+                    stripped = l.strip()
+                    if stripped.startswith(("-", "•", "\u2014", "\u2013")):
+                        content = stripped.lstrip("-•\u2014\u2013").strip()
+                        if content:   # skip lone dashes with no content
+                            bullets.append(content)
                 if bullets:
                     for b in bullets: st.markdown(f"— {b}")
                 else:
-                    st.markdown(body)
+                    # Fall back to raw body but filter out lone dash lines
+                    clean_body = "\n".join(
+                        l for l in body.split("\n")
+                        if l.strip() not in ("-", "—", "–", "•", "")
+                    ).strip()
+                    if clean_body:
+                        st.markdown(clean_body)
                 st.markdown("<div style='margin-bottom:13px'></div>", unsafe_allow_html=True)
             st.divider()
             st.download_button("&#11015; Download Digest", data=dt, file_name=sf, mime="text/markdown")

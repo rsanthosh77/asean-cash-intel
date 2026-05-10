@@ -46,6 +46,16 @@ ENTITY RULES — follow exactly:
 - If the signal is about industry-wide trends with no single primary actor,
   use the most relevant regulatory body or industry group.
 
+SO_WHAT FIELD RULES — critical, follow exactly:
+- Base the so_what strictly on what is stated in the source content.
+- Do NOT infer or introduce specific payment rail names (e.g. DuitNow, PESONet,
+  InstaPay, BI-FAST, PayNow, PromptPay, QRIS, UPI, FPS) unless they are
+  explicitly named in the source content.
+- If a rail implication exists but no specific rail is named in the source,
+  write "local instant payment rails" or "domestic real-time infrastructure".
+- Do NOT introduce specific product names, scheme names, or technical framework
+  names that are not present in the content being analysed.
+
 PRODUCT AREA RULES — assign the single best-matching category:
 
 "Liquidity Management"

@@ -111,6 +111,18 @@ RSS_FEEDS = [
     # Competitor Newsrooms
     # ════════════════════════════════════════════════
     "https://www.ocbc.com/group/news/rss.xml",
+
+    # ════════════════════════════════════════════════
+    # Cybersecurity — Banking & Corporate Channel Threats
+    # Scoped to threats affecting payment rails, SWIFT, corporate
+    # banking portals, and treasury systems.
+    # FS-ISAC and SWIFT ISAC require membership — not public RSS.
+    # ════════════════════════════════════════════════
+    #"https://www.finextra.com/rss/channel.aspx?channel=security",
+    #"https://www.finextra.com/rss/channel.aspx?channel=crime",
+    #"https://krebsonsecurity.com/feed/",
+    #"https://therecord.media/feed",
+    #"https://www.bankinfosecurity.com/rssFeeds.php?type=main",
 ]
 
 # ════════════════════════════════════════════════
@@ -121,6 +133,7 @@ SCRAPE_URLS = [
     # ── Competitor product pages ──
     "https://www.dbs.com.sg/corporate/solutions/cash-management",
     "https://www.jpmorgan.com/payments/payments-apac",
+    "https://www.jpmorgan.com/insights/payments/trends-innovation/",
     "https://www.business.hsbc.com.sg/en-sg/corporate-banking",
     "https://www.sc.com/en/corporate-investment-banking/transaction-banking/",
     "https://corporates.db.com/solutions/corporate-bank-solutions/cash-management/",
@@ -142,6 +155,7 @@ SCRAPE_URLS = [
     # ════════════════════════════════════════════════
     "https://www.mas.gov.sg/news",
     "https://www.mas.gov.sg/regulation/regulations-and-guidance",
+    #"https://www.mas.gov.sg/regulation/regulations-and-guidance/technology-risk-management-guidelines",
 
     # ── BSP (Bangko Sentral ng Pilipinas) — confirmed active (VERIFIED)
     # RSS feed URLs are SharePoint templates and don't resolve.

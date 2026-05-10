@@ -171,8 +171,20 @@ each naming a specific product area or market]
 Rules:
 - Prioritise signals with higher relevance scores
 - Do not invent facts not present in the signals
-- If a section has insufficient signals, say so briefly and move on
+- Every section MUST have content — never leave a section with only a dash or blank
+- If a section has insufficient signals, write one bullet summarising what IS available,
+  or write one sentence: "Insufficient signals this week for [section name]."
+- Never write a bare "—" as a bullet — always write a complete sentence
+- Keep each bullet concise — 2 sentences maximum, no padding
 - For signals with no date, note that the timing is unverified
+- Do NOT infer or name specific payment rail schemes (e.g. DuitNow, PESONet,
+  InstaPay, BI-FAST, PayNow, PromptPay, QRIS, UPI, FPS) unless they are
+  explicitly named in the signal data provided. If a rail implication exists
+  but no specific rail is named in the signals, write "local instant payment
+  infrastructure" or "domestic real-time rails" instead.
+- Do NOT introduce technical product names, scheme names, or specific framework
+  names that are not present in the signal data. Stick strictly to what the
+  signal data says. Never extrapolate beyond the provided signals.
 
 Signals:
 {signals_text}
@@ -182,8 +194,8 @@ Signals:
     print(f"   Using {len(top_signals)} signals ({len(recent)} total in window)")
 
     response = client.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=2500,
+        model="claude-sonnet-4-6",
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
 
